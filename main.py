@@ -66,7 +66,7 @@ def get_gemini_model():
     current_key = key_manager.get_next_key()
     genai.configure(api_key=current_key)
     # Usando o modelo flash conforme solicitado para rapidez e custo
-    return genai.GenerativeModel('models/gemini-1.5-flash')
+    return genai.GenerativeModel('models/gemini-flash-latest')
 
 def clean_json_response(text: str):
     """Limpa formatações markdown que a IA possa enviar."""
