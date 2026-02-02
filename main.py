@@ -63,11 +63,10 @@ def get_gemini_model():
     """Configura e retorna o modelo com a próxima chave."""
     current_key = key_manager.get_next_key()
     genai.configure(api_key=current_key)
-    # Mantendo exatamente o motor solicitado
     return genai.GenerativeModel('models/gemini-flash-latest')
 
 def clean_json_response(text: str):
-    """Limpa formatações markdown."""
+    """Garante que a resposta seja JSON puro sem markdown."""
     return text.replace("```json", "").replace("```", "").strip()
 
 # ==========================================
@@ -78,7 +77,7 @@ def clean_json_response(text: str):
 def read_root():
     return {"status": "Technobolt Brain Online", "keys_active": len(key_manager.keys)}
 
-# --- ROTA 1: ANÁLISE DE PREÇOS ---
+# --- ROTA 1: ANÁLISE DE PREÇOS (AMIGA ECONOMISTA) ---
 @app.post("/analisar_compras")
 async def analisar_compras(request: AnaliseRequest):
     if not request.produtos:
@@ -88,17 +87,22 @@ async def analisar_compras(request: AnaliseRequest):
         model = get_gemini_model()
         lista_json = json.dumps([p.dict() for p in request.produtos], ensure_ascii=False)
         
-        # Prompt Ajustado: Sem conversinha, direto ao ponto
         prompt = f"""
-        Analise a lista: {lista_json}. Orçamento: R$ {request.orcamento_total:.2f}.
+        Atue como uma amiga economista que quer ajudar a dona de casa a poupar.
+        Analise a lista: {lista_json}. Orçamento Total: R$ {request.orcamento_total:.2f}.
         
-        Regras de Saída:
-        1. Alerta 'red' para preços unitários absurdos (muito acima da média Brasil).
-        2. Alerta 'orange' para supérfluos se o gasto total estiver quase estourando.
-        3. Alerta 'yellow' para quantidades suspeitas (ex: 10kg de sal).
-        4. O 'feedback' DEVE ser uma frase curta e direta. NÃO use "Olá", "Atenção", "Cuidado". Vá direto ao fato.
+        Regras de Análise:
+        1. Preços Abusivos: Compare mentalmente com a média brasileira. Se for muito caro, alerta 'red'.
+        2. Supérfluos: Se o orçamento estiver apertado, marque itens não essenciais com alerta 'orange'.
+        3. Quantidades: Alerte 'yellow' para quantidades exageradas.
         
-        Retorne APENAS JSON: [{{ "id": "...", "alerta": "none/yellow/orange/red", "feedback": "texto curto" }}]
+        Regras de Texto (Feedback):
+        - Linguagem natural e carinhosa, mas direta.
+        - Dê uma dica prática (ex: "Troque por marca tal", "Leve pacote maior").
+        - PROIBIDO usar símbolos como asteriscos (**), hashtags (##) ou markdown. Use apenas texto puro.
+        - Não use saudações. Vá direto ao conselho.
+        
+        Retorne APENAS JSON: [{{ "id": "...", "alerta": "none/yellow/orange/red", "feedback": "Conselho prático e amigável aqui." }}]
         """
         
         response = model.generate_content(prompt)
@@ -109,32 +113,35 @@ async def analisar_compras(request: AnaliseRequest):
         print(f"Erro Analise: {e}")
         return {"analise": []}
 
-# --- ROTA 2: SUGESTÃO DE RECEITA ---
+# --- ROTA 2: SUGESTÃO DE RECEITA (CHEF AMIGA) ---
 @app.post("/sugerir_receita")
 async def sugerir_receita(request: ReceitaRequest):
     if not request.ingredientes:
-        return {"titulo": "Ops", "receita_texto": "Adicione itens ao carrinho."}
+        return {"titulo": "Ops", "receita_texto": "Adicione itens ao carrinho para eu criar uma receita."}
 
     try:
         model = get_gemini_model()
         lista_str = ", ".join(request.ingredientes)
         
-        # Prompt Ajustado: Proibido saudações
         prompt = f"""
-        Você é um chef de cozinha direto e prático.
-        Crie uma receita de "{request.tipo_refeicao}" usando: {lista_str}.
+        Você é uma cozinheira experiente e criativa.
+        Crie uma receita incrível de "{request.tipo_refeicao}" usando o máximo destes ingredientes: {lista_str}.
         
-        REGRAS RIGÍDAS DE TEXTO:
-        1. NÃO use saudações (ex: "Olá", "Claro", "Aqui está").
-        2. NÃO repita o título da receita no campo 'receita_texto'.
-        3. NÃO use Markdown pesado (sem ### ou **). Use apenas quebras de linha.
-        4. Comece o texto IMEDIATAMENTE com a lista de ingredientes ou modo de preparo.
-        5. Se faltar algo essencial (ovo, leite), avise no meio do texto de forma natural.
+        ESTRUTURA DA RESPOSTA (Obrigatório seguir):
+        1. Comece direto com o nome do prato (sem "Aqui está").
+        2. Liste os ingredientes de forma simples.
+        3. Explique o modo de preparo como se estivesse ensinando uma amiga (passo a passo fluido).
+        4. No final, adicione uma "Dica de Ouro" ou "Segredo do Chef" para o prato ficar especial.
+        
+        REGRAS VISUAIS:
+        - PROIBIDO usar Markdown (nada de negrito **, itálico *, títulos ##).
+        - Use apenas quebras de linha e letras maiúsculas para destacar TÍTULOS DE SEÇÕES se precisar.
+        - Texto limpo e fácil de ler no celular.
         
         Retorne APENAS JSON:
         {{
             "titulo": "Nome Criativo do Prato",
-            "receita_texto": "Ingredientes:... Modo de Preparo:..."
+            "receita_texto": "Texto completo da receita (ingredientes, preparo e dica extra)..."
         }}
         """
         
@@ -143,9 +150,9 @@ async def sugerir_receita(request: ReceitaRequest):
 
     except Exception as e:
         print(f"Erro Receita: {e}")
-        return {"titulo": "Erro", "receita_texto": "Tente novamente."}
+        return {"titulo": "Erro na Cozinha", "receita_texto": "Tente novamente em alguns segundos."}
 
-# --- ROTA 3: SUGERIR COMPLEMENTOS ---
+# --- ROTA 3: SUGERIR COMPLEMENTOS (MEMÓRIA AUXILIAR) ---
 @app.post("/sugerir_complementos_lista")
 async def sugerir_complementos(request: ListaRequest):
     if not request.itens_lista:
@@ -156,16 +163,16 @@ async def sugerir_complementos(request: ListaRequest):
         lista_str = ", ".join(request.itens_lista)
         
         prompt = f"""
-        Analise a lista planejada: {lista_str}.
-        Identifique o que falta para completar combinações óbvias (ex: Macarrão sem Molho).
+        Analise a lista de compras: {lista_str}.
+        Pense como quem cuida da casa: O que a pessoa esqueceu para completar as refeições ou limpeza?
         
         Regras:
-        1. Seja cirúrgico. Apenas o que é essencial.
-        2. 'motivo' deve ser curto (ex: "Para acompanhar o macarrão").
+        1. Identifique conexões lógicas (ex: Café sem Filtro? Macarrão sem Queijo? Sabão sem Amaciante?).
+        2. Sugira apenas o essencial que parece faltar.
         
-        Retorne APENAS JSON:
-        [ {{ "item_base": "Item da lista", "sugestao": "O que falta", "motivo": "Explicação curta" }} ]
-        Máximo 3 sugestões.
+        Retorno JSON (Texto limpo, sem markdown):
+        [ {{ "item_base": "Item da lista", "sugestao": "O que falta", "motivo": "Explicação breve e útil (ex: Para não faltar no café)" }} ]
+        Máximo 3 sugestões principais.
         """
         
         response = model.generate_content(prompt)
@@ -175,7 +182,7 @@ async def sugerir_complementos(request: ListaRequest):
         print(f"Erro Complementos: {e}")
         return {"sugestoes": []}
 
-# --- ROTA 4: CONFERÊNCIA DE CARRINHO ---
+# --- ROTA 4: CONFERÊNCIA DE CARRINHO (CHECKLIST INTELIGENTE) ---
 @app.post("/conferir_carrinho")
 async def conferir_carrinho(request: ConferenciaRequest):
     if not request.lista_planejada:
@@ -185,12 +192,15 @@ async def conferir_carrinho(request: ConferenciaRequest):
         model = get_gemini_model()
         
         prompt = f"""
+        Atue como um conferente atento.
         Lista Planejada: {', '.join(request.lista_planejada)}
         Carrinho: {', '.join(request.itens_carrinho)}
         
-        Retorne APENAS uma lista JSON com as Strings dos itens que estão na Planejada mas NÃO estão no Carrinho.
-        Use inteligência semântica.
-        Retorno: ["Item A", "Item B"]
+        Tarefa: Retorne quais itens da Lista Planejada ainda NÃO foram pegos.
+        Seja inteligente: Se a lista diz "Refrigerante" e no carrinho tem "Guaraná", considere pego.
+        
+        Retorne APENAS uma lista JSON simples de Strings com os nomes dos itens faltantes.
+        Exemplo: ["Feijão", "Detergente"]
         """
         
         response = model.generate_content(prompt)
