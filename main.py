@@ -16,7 +16,7 @@ class KeyManager:
         # Carrega as chaves das variáveis de ambiente
         self.keys = []
         for i in range(1, 8): # Procura de GEMINI_API_KEY_1 até GEMINI_API_KEY_7
-            key = os.environ.get(f"GEMINI_API_KEY_{i}")
+            key = os.environ.get(f"GEMINI_CHAVE_{i}")
             if key:
                 self.keys.append(key)
         
