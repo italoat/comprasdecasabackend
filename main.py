@@ -113,7 +113,7 @@ async def analisar_compras(request: AnaliseRequest):
     try:
         current_key = key_manager.get_next_key()
         genai.configure(api_key=current_key)
-        model = genai.GenerativeModel('models/gemini-1.5-flash')
+        model = genai.GenerativeModel('models/gemini-flash-latest')
         
         prompt = gerar_prompt_analise(request.produtos, request.orcamento_total)
         response = model.generate_content(prompt)
