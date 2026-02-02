@@ -136,7 +136,7 @@ async def sugerir_receita(request: ReceitaRequest):
     try:
         current_key = key_manager.get_next_key()
         genai.configure(api_key=current_key)
-        model = genai.GenerativeModel('models/gemini-1.5-flash')
+        model = genai.GenerativeModel('models/gemini-flash-latest')
         
         prompt = gerar_prompt_receita(request.ingredientes, request.tipo_refeicao)
         response = model.generate_content(prompt)
