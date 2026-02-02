@@ -9,22 +9,22 @@ from itertools import cycle
 app = FastAPI(title="Technobolt AI Shopper")
 
 # ==========================================
-# GERENCIADOR DE CHAVES (RODÍZIO)
+# GERENCIADOR DE CHAVES (RODÍZIO OTIMIZADO)
 # ==========================================
 class KeyManager:
     def __init__(self):
-        # Carrega as chaves das variáveis de ambiente
         self.keys = []
-        for i in range(1, 8): # Procura de GEMINI_API_KEY_1 até GEMINI_API_KEY_7
+        # Procura de chaves 1 a 7 nas variáveis de ambiente
+        for i in range(1, 8): 
             key = os.environ.get(f"GEMINI_CHAVE_{i}")
             if key:
                 self.keys.append(key)
         
         if not self.keys:
-            print("⚠️ AVISO: Nenhuma chave API encontrada nas variáveis de ambiente.")
+            print("⚠️ AVISO: Nenhuma chave API encontrada (GEMINI_CHAVE_1 ... 7).")
             self.keys = ["dummy_key"] 
             
-        self.key_cycle = cycle(self.keys) # Cria um loop infinito das chaves
+        self.key_cycle = cycle(self.keys)
 
     def get_next_key(self):
         return next(self.key_cycle)
@@ -32,69 +32,45 @@ class KeyManager:
 key_manager = KeyManager()
 
 # ==========================================
-# MODELOS DE DADOS
+# MODELOS DE DADOS (PYDANTIC)
 # ==========================================
 
-# Modelo para Análise de Preço/Orçamento
 class Produto(BaseModel):
     id: str
     nome: str
     preco_unitario: float
-    quantidade: int
+    quantidade: float 
 
 class AnaliseRequest(BaseModel):
     produtos: List[Produto]
     orcamento_total: float
 
-# NOVO: Modelo para Pedido de Receita
 class ReceitaRequest(BaseModel):
-    ingredientes: List[str] # Apenas os nomes dos produtos
-    tipo_refeicao: str      # Ex: "Almoço", "Jantar", "Lanche", "Café da Manhã"
+    ingredientes: List[str]
+    tipo_refeicao: str
+
+# NOVOS MODELOS
+class ListaRequest(BaseModel):
+    itens_lista: List[str] # Lista de planejamento
+
+class ConferenciaRequest(BaseModel):
+    lista_planejada: List[str]
+    itens_carrinho: List[str]
 
 # ==========================================
-# PROMPTS
+# FUNÇÕES AUXILIARES DE IA
 # ==========================================
 
-def gerar_prompt_analise(produtos, orcamento):
-    lista_json = json.dumps([p.dict() for p in produtos], ensure_ascii=False)
-    
-    return f"""
-    Atue como um assistente de economia doméstica.
-    Analise esta lista de compras e o orçamento de R$ {orcamento:.2f}.
-    Lista: {lista_json}
-    
-    Regras:
-    1. Identifique preços suspeitos (muito caros).
-    2. Identifique supérfluos se o gasto > 80% do orçamento.
-    3. Identifique erros de quantidade.
-    
-    Saída OBRIGATÓRIA: JSON puro com lista de objetos:
-    {{ "id": "...", "alerta": "none/yellow/orange/red", "feedback": "msg curta" }}
-    """
+def get_gemini_model():
+    """Configura e retorna o modelo com a próxima chave do rodízio."""
+    current_key = key_manager.get_next_key()
+    genai.configure(api_key=current_key)
+    # Usando o modelo flash conforme solicitado para rapidez e custo
+    return genai.GenerativeModel('models/gemini-1.5-flash')
 
-def gerar_prompt_receita(ingredientes, tipo_refeicao):
-    lista_str = ", ".join(ingredientes)
-    
-    return f"""
-    Atue como uma cozinheira experiente e amiga (persona humana).
-    O usuário quer fazer um "{tipo_refeicao}" e comprou estes itens: {lista_str}.
-    
-    Sua missão:
-    1. Crie UMA receita deliciosa usando o máximo possível desses itens.
-    2. Pode assumir que o usuário tem o básico em casa (sal, óleo, água, açúcar), mas se a receita precisar de algo específico que NÃO está na lista (ex: ovos, leite, fermento), você DEVE avisar.
-    
-    Formato da Resposta:
-    - Fale como uma pessoa, sem usar formatação de Markdown pesada (sem ###, sem negritos excessivos).
-    - Comece com o Nome do Prato.
-    - Liste os ingredientes (destacando: "Você vai precisar comprar X se não tiver em casa").
-    - Passo a passo numerado e simples.
-    
-    Saída OBRIGATÓRIA: Um JSON puro com este formato:
-    {{
-        "titulo": "Nome do Prato",
-        "receita_texto": "Texto completo da receita aqui, falando diretamente com o usuário..."
-    }}
-    """
+def clean_json_response(text: str):
+    """Limpa formatações markdown que a IA possa enviar."""
+    return text.replace("```json", "").replace("```", "").strip()
 
 # ==========================================
 # ROTAS DA API
@@ -102,62 +78,134 @@ def gerar_prompt_receita(ingredientes, tipo_refeicao):
 
 @app.get("/")
 def read_root():
-    return {"status": "Technobolt Brain Online", "keys_loaded": len(key_manager.keys)}
+    return {"status": "Technobolt Brain Online", "keys_active": len(key_manager.keys)}
 
-# Rota 1: Analisa Preços e Orçamento
+# --- ROTA 1: ANÁLISE DE PREÇOS (DURANTE A COMPRA) ---
 @app.post("/analisar_compras")
 async def analisar_compras(request: AnaliseRequest):
     if not request.produtos:
         return {"analise": []}
 
     try:
-        current_key = key_manager.get_next_key()
-        genai.configure(api_key=current_key)
-        model = genai.GenerativeModel('models/gemini-flash-latest')
+        model = get_gemini_model()
+        lista_json = json.dumps([p.dict() for p in request.produtos], ensure_ascii=False)
         
-        prompt = gerar_prompt_analise(request.produtos, request.orcamento_total)
+        prompt = f"""
+        Atue como especialista em economia doméstica.
+        Analise a lista: {lista_json}. Orçamento: R$ {request.orcamento_total:.2f}.
+        
+        Regras:
+        1. Alerta 'red' para preços unitários absurdamente caros para o Brasil.
+        2. Alerta 'orange' para supérfluos se o gasto total estiver próximo do orçamento.
+        3. Alerta 'yellow' para quantidades suspeitas (ex: 10kg de sal).
+        
+        Retorne APENAS JSON: [{{ "id": "...", "alerta": "none/yellow/orange/red", "feedback": "texto curto" }}]
+        """
+        
         response = model.generate_content(prompt)
-        
-        texto_limpo = response.text.replace("```json", "").replace("```", "").strip()
-        analise_json = json.loads(texto_limpo)
-        
+        analise_json = json.loads(clean_json_response(response.text))
         return {"analise": analise_json}
 
     except Exception as e:
         print(f"Erro Analise: {e}")
-        return {"analise": [], "error": str(e)}
+        return {"analise": []}
 
-# Rota 2: Sugere Receita (NOVA)
+# --- ROTA 2: SUGESTÃO DE RECEITA (PÓS COMPRA) ---
 @app.post("/sugerir_receita")
 async def sugerir_receita(request: ReceitaRequest):
     if not request.ingredientes:
-        return {"titulo": "Ops", "receita_texto": "Preciso de ingredientes para sugerir algo!"}
+        return {"titulo": "Ops", "receita_texto": "Adicione itens ao carrinho para eu sugerir algo!"}
 
     try:
-        current_key = key_manager.get_next_key()
-        genai.configure(api_key=current_key)
-        model = genai.GenerativeModel('models/gemini-flash-latest')
+        model = get_gemini_model()
+        lista_str = ", ".join(request.ingredientes)
         
-        prompt = gerar_prompt_receita(request.ingredientes, request.tipo_refeicao)
+        prompt = f"""
+        Atue como uma cozinheira amiga. O usuário quer fazer: "{request.tipo_refeicao}".
+        Ingredientes disponíveis: {lista_str}.
+        
+        Gere UMA receita.
+        Diretrizes de Estilo (IMPORTANTE):
+        - NÃO use símbolos markdown como negrito (**), itálico (*) ou cabeçalhos (###).
+        - Use apenas texto simples e quebras de linha.
+        - Fale diretamente com a pessoa ("Você vai precisar...").
+        - Se faltar um ingrediente essencial (ex: ovo, leite) que não está na lista, AVISE no texto.
+        
+        Retorne APENAS JSON:
+        {{
+            "titulo": "Nome do Prato",
+            "receita_texto": "Texto corrido da receita, ingredientes e modo de preparo..."
+        }}
+        """
+        
         response = model.generate_content(prompt)
-        
-        # Limpeza para garantir que venha apenas o JSON
-        texto_limpo = response.text.replace("```json", "").replace("```", "").strip()
-        
-        try:
-            receita_json = json.loads(texto_limpo)
-        except json.JSONDecodeError:
-            # Caso a IA falhe em mandar JSON, retornamos o texto cru formatado manualmente
-            return {
-                "titulo": "Sugestão do Chef",
-                "receita_texto": texto_limpo
-            }
-        
-        return receita_json
+        return json.loads(clean_json_response(response.text))
 
     except Exception as e:
         print(f"Erro Receita: {e}")
-        return {
-            "titulo": "Erro no Chef", 
-            "receita_texto": "Não consegui criar a receita agora. Tente novamente."
-        }
+        return {"titulo": "Erro no Chef", "receita_texto": "Tente novamente em instantes."}
+
+# --- ROTA 3: SUGERIR COMPLEMENTOS (PLANEJAMENTO) ---
+@app.post("/sugerir_complementos_lista")
+async def sugerir_complementos(request: ListaRequest):
+    if not request.itens_lista:
+        return {"sugestoes": []}
+
+    try:
+        model = get_gemini_model()
+        lista_str = ", ".join(request.itens_lista)
+        
+        prompt = f"""
+        Analise esta lista de compras planejada: {lista_str}.
+        Identifique itens complementares essenciais que parecem estar faltando.
+        Exemplo: Se tem 'Macarrão' mas não 'Molho', sugira Molho.
+        Exemplo: Se tem 'Café' mas não 'Açúcar/Adoçante', sugira.
+        Exemplo: Se tem 'Shampoo' mas não 'Condicionador', sugira.
+        
+        Retorne APENAS JSON (Lista de objetos):
+        [
+            {{
+                "item_base": "Item da lista que gerou a dica",
+                "sugestao": "O que comprar",
+                "motivo": "Explicação curta"
+            }}
+        ]
+        Limite a no máximo 3 sugestões mais críticas. Se a lista estiver boa, retorne [].
+        """
+        
+        response = model.generate_content(prompt)
+        return {"sugestoes": json.loads(clean_json_response(response.text))}
+
+    except Exception as e:
+        print(f"Erro Complementos: {e}")
+        return {"sugestoes": []}
+
+# --- ROTA 4: CONFERÊNCIA DE CARRINHO (CHECKLIST) ---
+@app.post("/conferir_carrinho")
+async def conferir_carrinho(request: ConferenciaRequest):
+    # Se não planejou nada, não tem o que conferir
+    if not request.lista_planejada:
+        return {"faltantes": []}
+
+    try:
+        model = get_gemini_model()
+        
+        prompt = f"""
+        Atue como um conferente inteligente.
+        Lista Planejada: {', '.join(request.lista_planejada)}
+        Carrinho (Já pego): {', '.join(request.itens_carrinho)}
+        
+        Tarefa: Retorne quais itens da 'Lista Planejada' NÃO estão no 'Carrinho'.
+        Use inteligência semântica (Ex: Se planejou 'Refrigerante' e pegou 'Coca-Cola', considere como pego/ok).
+        
+        Retorne APENAS JSON (Lista de Strings):
+        ["Item Faltante 1", "Item Faltante 2"]
+        Se pegou tudo, retorne [].
+        """
+        
+        response = model.generate_content(prompt)
+        return {"faltantes": json.loads(clean_json_response(response.text))}
+
+    except Exception as e:
+        print(f"Erro Conferencia: {e}")
+        return {"faltantes": []}
